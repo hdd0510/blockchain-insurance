@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build artifacts
+**/build/
+**/dist/
+**/.next/
+**/.cache/
+**/coverage/
+
+# Hardhat
+contracts/artifacts/
+contracts/cache/
+contracts/typechain-types/
+
+# Environment files
+.env
+**/.env
+**/.env.local
+!.env.example
+!**/.env.example
+
+# Logs
+*.log
+.logs/
+**/npm-debug.log*
+
+# Uploads (evidence files)
+backend/uploads/*
+!backend/uploads/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Python (just in case)
+**/__pycache__/
+*.pyc
