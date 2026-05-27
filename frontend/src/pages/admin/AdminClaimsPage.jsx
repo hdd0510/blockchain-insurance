@@ -5,17 +5,23 @@ import api from "../../services/api";
 import LoadingSpinner from "../../components/ui/LoadingSpinner";
 import ClaimStatusBadge from "../../components/claim/ClaimStatusBadge";
 import TxHash from "../../components/ui/TxHash";
+import { signApproval, rejectClaim } from "../../services/claim-service";
+import { CLAIM_STATUS_LABELS } from "../../utils/format";
+import { useAuth } from "../../context/AuthContext";
+import { signClaimApprovalWithWallet } from "../../services/contract-service";
 
-// Inline reject modal — rendered inside the table row area
 function RejectModal({ claimId, onConfirm, onCancel, loading }) {
   const [reason, setReason] = useState("");
-
   return (
     <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-50 px-4">
       <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
         <h3 className="text-base font-semibold text-gray-800 mb-3">
-          Từ chối yêu cầu #{claimId}
+          Từ chối thủ công yêu cầu #{claimId}
         </h3>
+        <p className="text-xs text-gray-500 mb-3">
+          Lưu ý: từ chối thủ công bỏ qua Oracle. Multi-sig approve yêu cầu từng
+          admin signer tự ký bằng MetaMask.
+        </p>
         <textarea
           value={reason}
           onChange={(e) => setReason(e.target.value)}
@@ -27,14 +33,14 @@ function RejectModal({ claimId, onConfirm, onCancel, loading }) {
           <button
             onClick={() => onConfirm(reason)}
             disabled={loading || !reason.trim()}
-            className="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-medium py-2 rounded-lg text-sm transition-colors"
+            className="flex-1 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white font-medium py-2 rounded-lg text-sm"
           >
             {loading ? "Đang xử lý..." : "Xác nhận từ chối"}
           </button>
           <button
             onClick={onCancel}
             disabled={loading}
-            className="px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 rounded-lg text-sm transition-colors"
+            className="px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 rounded-lg text-sm"
           >
             Hủy
           </button>
@@ -44,32 +50,39 @@ function RejectModal({ claimId, onConfirm, onCancel, loading }) {
   );
 }
 
-export default function AdminClaimsPage() {
+export default function AdminClaimsPage({ mode = "admin" }) {
+  const { isInsurer, provider } = useAuth();
   const [claims, setClaims] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [processingId, setProcessingId] = useState(null); // claim being approved/rejected
-  const [rejectModalId, setRejectModalId] = useState(null); // claim to reject
+  const [processingId, setProcessingId] = useState(null);
+  const [rejectModalId, setRejectModalId] = useState(null);
   const [statusFilter, setStatusFilter] = useState("all");
 
   const fetchClaims = useCallback(() => {
     setLoading(true);
     api
-      .get("/admin/claims")
+      .get("/claims")
       .then((res) => setClaims(res.data?.claims || res.data || []))
-      .catch((err) => toast.error(err?.response?.data?.error || "Không thể tải yêu cầu."))
+      .catch((err) =>
+        toast.error(err?.response?.data?.error || "Không thể tải yêu cầu.")
+      )
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { fetchClaims(); }, [fetchClaims]);
+  useEffect(() => {
+    fetchClaims();
+  }, [fetchClaims]);
 
-  async function handleApprove(claimId) {
+  async function handleSign(claimId, chainClaimId) {
     setProcessingId(claimId);
     try {
-      await api.post(`/admin/claims/${claimId}/approve`);
-      toast.success(`Yêu cầu #${claimId} đã được duyệt.`);
+      if (!provider) throw new Error("Kết nối MetaMask trước");
+      const receipt = await signClaimApprovalWithWallet(provider, chainClaimId);
+      await signApproval(claimId, false, receipt.hash);
+      toast.success(`Đã ký multi-sig yêu cầu #${claimId} bằng ví hiện tại`);
       fetchClaims();
     } catch (err) {
-      toast.error(err?.response?.data?.error || "Duyệt thất bại.");
+      toast.error(err?.response?.data?.error || err.message || "Ký thất bại.");
     } finally {
       setProcessingId(null);
     }
@@ -79,7 +92,7 @@ export default function AdminClaimsPage() {
     if (!rejectModalId) return;
     setProcessingId(rejectModalId);
     try {
-      await api.post(`/admin/claims/${rejectModalId}/reject`, { reason });
+      await rejectClaim(rejectModalId, reason);
       toast.success(`Yêu cầu #${rejectModalId} đã bị từ chối.`);
       setRejectModalId(null);
       fetchClaims();
@@ -90,11 +103,13 @@ export default function AdminClaimsPage() {
     }
   }
 
-  const filteredClaims = statusFilter === "all"
-    ? claims
-    : claims.filter((c) => c.status === statusFilter);
+  const filteredClaims =
+    statusFilter === "all"
+      ? claims
+      : claims.filter((c) => c.status === statusFilter);
 
-  const actionable = (status) => status === "pending" || status === "under_review";
+  const canSign = (status) =>
+    ["pending", "under_review", "needs_info"].includes(status);
 
   if (loading) return <LoadingSpinner text="Đang tải yêu cầu..." />;
 
@@ -110,19 +125,21 @@ export default function AdminClaimsPage() {
       )}
 
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">Quản lý yêu cầu bồi thường</h1>
+          <h1 className="text-2xl font-bold text-gray-800">
+            {mode === "insurer" || isInsurer
+              ? "Insurer Portal: xử lý yêu cầu bồi thường"
+              : "Quản lý yêu cầu bồi thường (multi-sig + Oracle)"}
+          </h1>
         <span className="text-sm text-gray-400">{claims.length} yêu cầu</span>
       </div>
 
-      {/* Status filter tabs */}
       <div className="flex gap-2 mb-5 flex-wrap">
         {[
           { value: "all", label: "Tất cả" },
-          { value: "pending", label: "Chờ xử lý" },
-          { value: "under_review", label: "Đang xem xét" },
-          { value: "approved", label: "Đã duyệt" },
-          { value: "rejected", label: "Từ chối" },
-          { value: "paid", label: "Đã thanh toán" },
+          ...Object.entries(CLAIM_STATUS_LABELS).map(([value, label]) => ({
+            value,
+            label,
+          })),
         ].map((f) => (
           <button
             key={f.value}
@@ -157,32 +174,38 @@ export default function AdminClaimsPage() {
                 <th className="px-4 py-3 text-left">Khách hàng</th>
                 <th className="px-4 py-3 text-left">Số tiền</th>
                 <th className="px-4 py-3 text-left">Trạng thái</th>
+                <th className="px-4 py-3 text-left">Multi-sig</th>
                 <th className="px-4 py-3 text-left">Tx Hash</th>
-                <th className="px-4 py-3 text-left">Ngày tạo</th>
                 <th className="px-4 py-3 text-left">Thao tác</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
               {filteredClaims.map((claim) => (
-                <tr key={claim.id} className="hover:bg-gray-50 transition-colors">
+                <tr key={claim.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3 font-medium text-gray-800">
-                    <Link to={`/claims/${claim.id}`} className="hover:text-indigo-600">
+                    <Link
+                      to={`/claims/${claim.id}`}
+                      className="hover:text-indigo-600"
+                    >
                       #{claim.id}
                     </Link>
                   </td>
                   <td className="px-4 py-3 text-gray-600">
                     {claim.policy_id ? (
-                      <Link to={`/policies/${claim.policy_id}`} className="text-indigo-600 hover:underline">
+                      <Link
+                        to={`/policies/${claim.policy_id}`}
+                        className="text-indigo-600 hover:underline"
+                      >
                         #{claim.policy_id}
                       </Link>
-                    ) : "—"}
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                    {claim.wallet
-                      ? `${claim.wallet.slice(0, 6)}...${claim.wallet.slice(-4)}`
-                      : claim.user?.wallet
-                        ? `${claim.user.wallet.slice(0, 6)}...${claim.user.wallet.slice(-4)}`
-                        : "—"}
+                    {claim.claimant_wallet
+                      ? `${claim.claimant_wallet.slice(0, 6)}...${claim.claimant_wallet.slice(-4)}`
+                      : "—"}
                   </td>
                   <td className="px-4 py-3 font-semibold text-gray-800">
                     {claim.amount_eth} ETH
@@ -190,34 +213,41 @@ export default function AdminClaimsPage() {
                   <td className="px-4 py-3">
                     <ClaimStatusBadge status={claim.status} />
                   </td>
+                  <td className="px-4 py-3 text-xs">
+                    <span className="font-semibold">
+                      {claim.approvals_count ?? 0}/
+                      {claim.threshold_required ?? "?"}
+                    </span>
+                  </td>
                   <td className="px-4 py-3">
                     <TxHash hash={claim.tx_hash} />
                   </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs">
-                    {claim.created_at
-                      ? new Date(claim.created_at).toLocaleDateString("vi-VN")
-                      : "—"}
-                  </td>
                   <td className="px-4 py-3">
-                    {actionable(claim.status) ? (
-                      <div className="flex gap-2">
+                    {canSign(claim.status) ? (
+                      <div className="flex gap-1 flex-wrap">
                         <button
-                          onClick={() => handleApprove(claim.id)}
+                          onClick={() => handleSign(claim.id, claim.chain_claim_id)}
                           disabled={processingId === claim.id}
-                          className="bg-green-50 hover:bg-green-100 text-green-700 text-xs font-medium px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
+                          className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-medium px-2.5 py-1 rounded-lg disabled:opacity-50"
+                          title="Ký bằng ví MetaMask hiện tại"
                         >
-                          {processingId === claim.id ? "..." : "Duyệt"}
+                          {processingId === claim.id ? "..." : "Ký bằng ví"}
                         </button>
                         <button
                           onClick={() => setRejectModalId(claim.id)}
                           disabled={processingId === claim.id}
-                          className="bg-red-50 hover:bg-red-100 text-red-700 text-xs font-medium px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
+                          className="bg-red-50 hover:bg-red-100 text-red-700 text-xs font-medium px-2.5 py-1 rounded-lg disabled:opacity-50"
                         >
                           Từ chối
                         </button>
                       </div>
                     ) : (
-                      <span className="text-xs text-gray-300">—</span>
+                      <Link
+                        to={`/claims/${claim.id}`}
+                        className="text-xs text-gray-400 hover:text-indigo-600"
+                      >
+                        Xem
+                      </Link>
                     )}
                   </td>
                 </tr>

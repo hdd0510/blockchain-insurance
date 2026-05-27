@@ -8,8 +8,10 @@ export function AuthProvider({ children }) {
   const { account, provider, connect: connectWallet } = useWallet();
   const [user, setUser] = useState(() => getStoredUser());
 
-  // isAdmin derived from stored user role
   const isAdmin = user?.role === "admin";
+  const isInsurer = user?.role === "insurer";
+  const isHospital = user?.role === "hospital";
+  const isCustomer = user?.role === "customer";
 
   /**
    * Connect MetaMask then authenticate with backend.
@@ -34,7 +36,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, setUser, isAdmin, account, provider, connect, logout }}>
+    <AuthContext.Provider value={{ user, setUser, isAdmin, isInsurer, isHospital, isCustomer, account, provider, connect, logout }}>
       {children}
     </AuthContext.Provider>
   );

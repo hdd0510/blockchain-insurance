@@ -47,7 +47,7 @@ export default function AdminNewPolicyPage() {
         max_coverage_eth: form.max_coverage_eth,
         duration_days: parseInt(form.duration_days),
       };
-      const res = await api.post("/admin/policies", payload);
+      const res = await api.post("/policies", payload);
       const policy = res.data?.policy || res.data;
       toast.success(`Hợp đồng #${policy.id} đã được tạo thành công!`);
       navigate("/admin");

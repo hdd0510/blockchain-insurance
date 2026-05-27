@@ -1,15 +1,12 @@
 import StatusBadge from "../ui/StatusBadge";
-import { claimStatusLabel } from "../../utils/format";
+import { CLAIM_STATUS_KEYS, claimStatusLabel } from "../../utils/format";
 
-// Claim-specific status badge mapping numeric or string status to Vietnamese label
+// Renders a colored badge for both numeric (on-chain) and string (off-chain) claim statuses.
 export default function ClaimStatusBadge({ status }) {
-  // Handle both numeric (from chain) and string (from API) status
-  const isNumeric = typeof status === "number" || (typeof status === "string" && !isNaN(status));
-  const label = isNumeric ? claimStatusLabel(Number(status)) : claimStatusLabel(status);
-
-  // Map numeric index to string key for color
-  const NUMERIC_TO_KEY = ["pending", "under_review", "needs_info", "approved", "rejected", "paid"];
-  const colorKey = isNumeric ? (NUMERIC_TO_KEY[Number(status)] || "pending") : status;
-
-  return <StatusBadge status={colorKey} label={label} />;
+  const isNumeric =
+    typeof status === "number" ||
+    (typeof status === "string" && status !== "" && !isNaN(status));
+  const key = isNumeric ? CLAIM_STATUS_KEYS[Number(status)] || "pending" : status;
+  const label = claimStatusLabel(isNumeric ? Number(status) : status);
+  return <StatusBadge status={key} label={label} />;
 }

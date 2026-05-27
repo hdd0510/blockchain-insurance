@@ -29,8 +29,8 @@ export default function AdminDashboard() {
     async function fetchData() {
       try {
         const [pRes, cRes] = await Promise.all([
-          api.get("/admin/policies"),
-          api.get("/admin/claims"),
+          api.get("/policies"),
+          api.get("/claims"),
         ]);
         setPolicies(pRes.data?.policies || pRes.data || []);
         setClaims(cRes.data?.claims || cRes.data || []);
@@ -57,20 +57,38 @@ export default function AdminDashboard() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <h1 className="text-2xl font-bold text-gray-800">Admin Dashboard</h1>
-        <div className="flex gap-3">
+        <div className="flex gap-2 flex-wrap">
           <Link
             to="/admin/policies/new"
-            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
           >
             + Tạo hợp đồng
           </Link>
           <Link
             to="/admin/claims"
-            className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium"
           >
-            Xem tất cả yêu cầu
+            Yêu cầu (multi-sig)
+          </Link>
+          <Link
+            to="/admin/hospitals"
+            className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 px-4 py-2 rounded-lg text-sm font-medium"
+          >
+            Bệnh viện
+          </Link>
+          <Link
+            to="/admin/audit-logs"
+            className="bg-purple-50 hover:bg-purple-100 text-purple-700 px-4 py-2 rounded-lg text-sm font-medium"
+          >
+            Audit logs
+          </Link>
+          <Link
+            to="/appeals"
+            className="bg-amber-50 hover:bg-amber-100 text-amber-700 px-4 py-2 rounded-lg text-sm font-medium"
+          >
+            Kháng cáo
           </Link>
         </div>
       </div>

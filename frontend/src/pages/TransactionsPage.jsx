@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import api from "../services/api";
+import { useAuth } from "../context/AuthContext";
 import LoadingSpinner from "../components/ui/LoadingSpinner";
 import ClaimStatusBadge from "../components/claim/ClaimStatusBadge";
 
@@ -50,6 +51,7 @@ const POLICY_TYPE_LABEL = {
 };
 
 export default function TransactionsPage() {
+  const { user } = useAuth();
   const [transactions, setTransactions] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -88,17 +90,16 @@ export default function TransactionsPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-indigo-50 py-10 px-4">
-      <div className="max-w-7xl mx-auto">
+    <div className="max-w-7xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center gap-2 mb-2">
             <span className="text-xs font-mono uppercase tracking-widest text-indigo-600 bg-indigo-100 px-2 py-1 rounded">
-              ⛓ PUBLIC ON-CHAIN EXPLORER
+              ⛓ On-chain Explorer
             </span>
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">Lịch sử giao dịch bồi thường</h1>
-          <p className="text-gray-600 mt-2 max-w-2xl">
+          <h1 className="text-2xl font-bold text-gray-900">Lịch sử giao dịch bồi thường</h1>
+          <p className="text-gray-600 mt-2 max-w-2xl text-sm">
             Toàn bộ yêu cầu bồi thường được ghi nhận trên blockchain — minh bạch, không thể chỉnh sửa.
             Bất kỳ ai cũng có thể kiểm chứng tính xác thực thông qua transaction hash.
           </p>
@@ -192,14 +193,27 @@ export default function TransactionsPage() {
           </div>
         </div>
 
-        {/* Footer link */}
+        {/* Footer */}
         <div className="mt-6 text-center text-sm text-gray-500">
-          <Link to="/login" className="text-indigo-600 hover:underline font-medium">
-            Đăng nhập
-          </Link>
-          {" "}để tạo hợp đồng và nộp yêu cầu bồi thường của riêng bạn.
+          {user ? (
+            <>
+              <Link to="/dashboard" className="text-indigo-600 hover:underline font-medium">
+                ← Về Dashboard
+              </Link>
+              {" · "}
+              <Link to="/claims" className="text-indigo-600 hover:underline font-medium">
+                Yêu cầu của tôi
+              </Link>
+            </>
+          ) : (
+            <>
+              <Link to="/login" className="text-indigo-600 hover:underline font-medium">
+                Đăng nhập
+              </Link>
+              {" "}để tạo hợp đồng và nộp yêu cầu bồi thường của riêng bạn.
+            </>
+          )}
         </div>
-      </div>
     </div>
   );
 }

@@ -3,24 +3,25 @@ import { AuthProvider } from "./context/AuthContext";
 import Navbar from "./components/layout/Navbar";
 import ProtectedRoute from "./components/layout/ProtectedRoute";
 
-// Public pages
 import LoginPage from "./pages/LoginPage";
 import TransactionsPage from "./pages/TransactionsPage";
 
-// Customer pages
 import DashboardPage from "./pages/DashboardPage";
 import PoliciesPage from "./pages/PoliciesPage";
 import PolicyDetailPage from "./pages/PolicyDetailPage";
 import ClaimsPage from "./pages/ClaimsPage";
 import NewClaimPage from "./pages/NewClaimPage";
 import ClaimDetailPage from "./pages/ClaimDetailPage";
+import AppealsPage from "./pages/AppealsPage";
+import HospitalPortalPage from "./pages/HospitalPortalPage";
 
-// Admin pages
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import AdminNewPolicyPage from "./pages/admin/AdminNewPolicyPage";
 import AdminClaimsPage from "./pages/admin/AdminClaimsPage";
+import AdminAuditLogsPage from "./pages/admin/AdminAuditLogsPage";
+import AdminHospitalsPage from "./pages/admin/AdminHospitalsPage";
+import InsurerClaimsPage from "./pages/insurer/InsurerClaimsPage";
 
-// Layout wrapper for authenticated pages (includes Navbar)
 function AppLayout({ children }) {
   return (
     <div className="min-h-screen bg-gray-50">
@@ -30,95 +31,66 @@ function AppLayout({ children }) {
   );
 }
 
+const wrap = (el) => (
+  <ProtectedRoute>
+    <AppLayout>{el}</AppLayout>
+  </ProtectedRoute>
+);
+
+const wrapAdmin = (el) => (
+  <ProtectedRoute adminOnly>
+    <AppLayout>{el}</AppLayout>
+  </ProtectedRoute>
+);
+
+const wrapRoles = (el, roles) => (
+  <ProtectedRoute roles={roles}>
+    <AppLayout>{el}</AppLayout>
+  </ProtectedRoute>
+);
+
+/** Public route that still uses the app shell (navbar, login state). */
+const wrapLayout = (el) => <AppLayout>{el}</AppLayout>;
+
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <Routes>
-          {/* Public */}
           <Route path="/login" element={<LoginPage />} />
-          <Route path="/transactions" element={<TransactionsPage />} />
+          <Route path="/transactions" element={wrapLayout(<TransactionsPage />)} />
 
-          {/* Root redirect */}
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-          {/* Protected customer routes */}
+          {/* Authenticated routes (any role) */}
+          <Route path="/dashboard" element={wrap(<DashboardPage />)} />
+
+          {/* Customer routes */}
+          <Route path="/policies" element={wrap(<PoliciesPage />)} />
+          <Route path="/policies/:id" element={wrap(<PolicyDetailPage />)} />
+          <Route path="/claims" element={wrap(<ClaimsPage />)} />
+          <Route path="/claims/new" element={wrap(<NewClaimPage />)} />
+          <Route path="/claims/:id" element={wrap(<ClaimDetailPage />)} />
+          <Route path="/appeals" element={wrap(<AppealsPage />)} />
+
           <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <AppLayout><DashboardPage /></AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/policies"
-            element={
-              <ProtectedRoute>
-                <AppLayout><PoliciesPage /></AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/policies/:id"
-            element={
-              <ProtectedRoute>
-                <AppLayout><PolicyDetailPage /></AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/claims"
-            element={
-              <ProtectedRoute>
-                <AppLayout><ClaimsPage /></AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/claims/new"
-            element={
-              <ProtectedRoute>
-                <AppLayout><NewClaimPage /></AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/claims/:id"
-            element={
-              <ProtectedRoute>
-                <AppLayout><ClaimDetailPage /></AppLayout>
-              </ProtectedRoute>
-            }
+            path="/insurer/claims"
+            element={wrapRoles(<InsurerClaimsPage />, ["insurer", "admin"])}
           />
 
-          {/* Protected admin routes */}
+          {/* Hospital portal */}
           <Route
-            path="/admin"
-            element={
-              <ProtectedRoute adminOnly>
-                <AppLayout><AdminDashboard /></AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/admin/policies/new"
-            element={
-              <ProtectedRoute adminOnly>
-                <AppLayout><AdminNewPolicyPage /></AppLayout>
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/admin/claims"
-            element={
-              <ProtectedRoute adminOnly>
-                <AppLayout><AdminClaimsPage /></AppLayout>
-              </ProtectedRoute>
-            }
+            path="/hospital"
+            element={wrapRoles(<HospitalPortalPage />, ["hospital", "admin"])}
           />
 
-          {/* Fallback */}
+          {/* Admin routes */}
+          <Route path="/admin" element={wrapAdmin(<AdminDashboard />)} />
+          <Route path="/admin/policies/new" element={wrapAdmin(<AdminNewPolicyPage />)} />
+          <Route path="/admin/claims" element={wrapAdmin(<AdminClaimsPage />)} />
+          <Route path="/admin/audit-logs" element={wrapAdmin(<AdminAuditLogsPage />)} />
+          <Route path="/admin/hospitals" element={wrapAdmin(<AdminHospitalsPage />)} />
+
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </AuthProvider>
