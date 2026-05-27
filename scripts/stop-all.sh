@@ -25,10 +25,11 @@ echo "[stop-all] Stopping services..."
 
 stop_pid_file "$LOG_DIR/frontend.pid" "frontend"
 stop_pid_file "$LOG_DIR/backend.pid"  "backend"
+stop_pid_file "$LOG_DIR/hospital.pid" "hospital"
 stop_pid_file "$LOG_DIR/hardhat.pid"  "hardhat"
 
 # Also kill any lingering processes on known ports
-for port in 3000 3001 8545; do
+for port in 3000 3001 3002 8545; do
   fuser -k "$port"/tcp 2>/dev/null && echo "    ✓ Cleared port $port" || true
 done
 
