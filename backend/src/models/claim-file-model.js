@@ -26,10 +26,20 @@ const ClaimFile = sequelize.define(
       type: DataTypes.STRING(100),
       allowNull: false,
     },
-    // Absolute path on disk under backend/uploads/
+    // Absolute path on disk under backend/uploads/ (kept for backward compat).
     stored_path: {
       type: DataTypes.STRING(500),
-      allowNull: false,
+      allowNull: true,
+    },
+    // Section 2.1: file goes to IPFS-like service; we keep the CID + sha256
+    // hash so the on-chain `evidenceHash` can be verified later.
+    ipfs_cid: {
+      type: DataTypes.STRING(120),
+      allowNull: true,
+    },
+    content_hash: {
+      type: DataTypes.STRING(66),
+      allowNull: true,
     },
   },
   {

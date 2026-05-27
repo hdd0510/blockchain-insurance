@@ -27,9 +27,13 @@ const User = sequelize.define(
       allowNull: true,
     },
     role: {
-      type: DataTypes.ENUM('admin', 'customer'),
+      type: DataTypes.ENUM('admin', 'customer', 'hospital', 'insurer'),
       allowNull: false,
       defaultValue: 'customer',
+    },
+    hospital_name: {
+      type: DataTypes.STRING(120),
+      allowNull: true,
     },
     // Random string used as MetaMask sign challenge
     nonce: {

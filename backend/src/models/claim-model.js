@@ -35,10 +35,16 @@ const Claim = sequelize.define(
       type: DataTypes.ENUM(
         'pending',
         'under_review',
+        'oracle_verified',
         'needs_info',
         'approved',
+        'paid',
         'rejected',
-        'paid'
+        'appealed',
+        'appeal_reviewing',
+        'appeal_accepted',
+        'appeal_rejected',
+        'expired'
       ),
       allowNull: false,
       defaultValue: 'pending',
@@ -57,6 +63,41 @@ const Claim = sequelize.define(
       defaultValue: DataTypes.NOW,
     },
     processed_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    // v2 fields (multi-sig, oracle, hospital)
+    patient_id_hash: {
+      type: DataTypes.STRING(66),
+      allowNull: true,
+    },
+    hospital_wallet: {
+      type: DataTypes.STRING(42),
+      allowNull: true,
+    },
+    approvals_count: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    threshold_required: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    oracle_request_id: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+    },
+    oracle_verified: {
+      type: DataTypes.BOOLEAN,
+      allowNull: true,
+    },
+    oracle_note: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+    },
+    // Auto-expire if claim sits in non-terminal state past this time.
+    timeout_at: {
       type: DataTypes.DATE,
       allowNull: true,
     },
