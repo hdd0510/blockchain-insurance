@@ -1,96 +1,243 @@
-# InsurChain — Architecture
+# InsurChain v3 — Architecture And Diagrams
 
-Tài liệu mô tả kiến trúc tổng thể bằng 3 diagrams (Component, ERD, Deployment) và giải thích các functions chính của repo.
+## 1. Actor Model
 
----
+- `Customer`: submit claim, upload evidence, file appeal
+- `Hospital`: verify patient record manually
+- `Insurer`: handle claim operations and appeal review
+- `Admin`: governance, policy admin, registry, audit
+- `Oracle Service`: technical bridge between chain and hospital service
+- `Smart Contract`: final payout / reject authority
 
-## 1. Component Diagram
-
-Mô tả các thành phần phần mềm và cách chúng giao tiếp.
+## 2. Use Case Diagram
 
 ```mermaid
 flowchart LR
-    subgraph Browser["Browser"]
-        MM[MetaMask Extension]
-        FE["React SPA<br/>(frontend/)"]
-    end
+    Customer(("Customer"))
+    Hospital(("Hospital"))
+    Insurer(("Insurer"))
+    Admin(("Admin"))
+    Oracle(("Oracle Service"))
+    SC(("Claims Smart Contract"))
 
-    subgraph Server["Backend Host"]
-        API["Express API<br/>(backend/src/app.js)"]
-        AUTH["auth-controller<br/>nonce + JWT"]
-        POL["policy-controller"]
-        CLM["claim-controller"]
-        FILE["file-controller<br/>(multer)"]
-        PUB["public-controller<br/>transparency"]
-        MW["auth + role middleware"]
-        BC["blockchain.js<br/>ethers JsonRpcProvider"]
-        FS[("backend/uploads/<br/>evidence files")]
-    end
+    UC1["Submit Claim"]
+    UC2["Upload Evidence to IPFS"]
+    UC3["Track Claim Status"]
+    UC4["File Appeal"]
+    UC5["Review Claim"]
+    UC6["Sign Multi-sig Approval"]
+    UC7["Review Appeal"]
+    UC8["View Verification Queue"]
+    UC9["Manual Medical Verification"]
+    UC10["Register Hospital"]
+    UC11["View Audit Logs"]
+    UC12["Request Verification"]
+    UC13["Auto Payout / Reject"]
 
-    subgraph Chain["Hardhat / EVM"]
-        IP["InsurancePolicy.sol"]
-        CP["ClaimsProcessor.sol"]
-    end
+    Customer --- UC1
+    Customer --- UC2
+    Customer --- UC3
+    Customer --- UC4
 
-    DB[("MySQL<br/>insurance_db")]
+    Insurer --- UC5
+    Insurer --- UC6
+    Insurer --- UC7
+    Insurer --- UC8
 
-    FE -- "HTTP /api/*" --> API
-    FE -- "eth_requestAccounts<br/>personal_sign<br/>contract calls" --> MM
-    MM -- "JSON-RPC" --> IP
-    MM -- "JSON-RPC" --> CP
+    Hospital --- UC8
+    Hospital --- UC9
 
-    API --> MW
-    MW --> AUTH & POL & CLM & FILE & PUB
-    AUTH -- "verifyMessage" --> AUTH
-    POL & CLM -- "Sequelize" --> DB
-    POL & CLM -- "admin tx" --> BC
-    BC -- "JSON-RPC :8545" --> IP
-    BC -- "JSON-RPC :8545" --> CP
-    FILE --> FS
-    PUB -- "read events" --> BC
+    Admin --- UC10
+    Admin --- UC11
+
+    Oracle --- UC12
+    SC --- UC12
+    SC --- UC13
 ```
 
-**Luồng chính:**
-- Frontend gọi MetaMask trực tiếp để ký nonce và gửi tx on-chain (customer submit claim, admin trigger payout từ admin UI).
-- Backend dùng `PRIVATE_KEY` của admin để gọi các function `onlyAdmin` (vd. `createPolicy`) khi API admin được gọi.
-- Metadata (status, files, user profile) lưu MySQL; nguồn sự thật về tiền/quyền sở hữu vẫn ở on-chain.
+## 3. Activity Diagram
 
----
+```mermaid
+flowchart TB
+    subgraph C["Customer"]
+      C1[Submit claim]
+      C2[Upload evidence -> IPFS]
+      C3[Wait for status]
+    end
 
-## 2. ERD (MySQL schema)
+    subgraph I["Insurer"]
+      I1[Review claim]
+      I2[Collect multi-sig approvals]
+    end
+
+    subgraph O["Oracle Service"]
+      O1[Listen VerificationRequested]
+      O2[Call hospital-service record match]
+      O3[Create pending_manual verification row]
+    end
+
+    subgraph H["Hospital"]
+      H1[Open hospital portal]
+      H2[Inspect matched medical record]
+      H3[Choose verified / not_verified]
+    end
+
+    subgraph S["Smart Contract"]
+      S1[Receive oracle fulfill]
+      S2{Verified?}
+      S3[Transfer payout]
+      S4[Reject claim]
+    end
+
+    C1 --> C2 --> I1 --> I2 --> O1 --> O2 --> O3 --> H1 --> H2 --> H3 --> S1
+    S1 --> S2
+    S2 -- yes --> S3 --> C3
+    S2 -- no --> S4 --> C3
+```
+
+## 4. Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Customer
+    participant FE as React Frontend
+    participant BE as Insurance Backend
+    participant SC as ClaimsProcessor
+    participant OR as MockOracle
+    participant OS as Oracle Service
+    participant HS as Hospital Service :3002
+    participant HP as Hospital Portal User
+
+    U->>FE: Submit claim + patient_id
+    FE->>SC: submitClaim(...)
+    FE->>BE: POST /claims
+    BE-->>FE: claim mirrored in MySQL
+
+    FE->>BE: insurer signs claim
+    BE->>SC: signApproval(...) x N/M
+    SC->>OR: requestVerification(claimId, patientIdHash, hospital)
+    OR-->>OS: VerificationRequested
+
+    OS->>HS: POST /records/match
+    HS-->>OS: matched record / no record
+    OS->>BE: create hospital_verifications(status=pending_manual)
+
+    HP->>FE: Open hospital portal
+    FE->>BE: GET /hospital/verifications
+    HP->>FE: Click Verified / Not verified
+    FE->>BE: POST /hospital/verifications/:id/manual
+    BE->>OR: fulfillVerification(requestId, verdict, note)
+    OR->>SC: fulfillVerification(...)
+
+    alt verified
+      SC->>U: payout ETH
+    else not verified
+      SC-->>U: claim rejected
+    end
+```
+
+## 5. Component Diagram
+
+```mermaid
+flowchart LR
+    subgraph Browser
+      FE["React App"]
+      MM["MetaMask"]
+    end
+
+    subgraph InsuranceHost
+      API["Insurance Backend"]
+      ORC["Oracle Service"]
+      DB[("MySQL")]
+      IPFS["Mock IPFS Storage"]
+    end
+
+    subgraph HospitalHost
+      HS["Hospital Service"]
+    end
+
+    subgraph Chain
+      CP["ClaimsProcessor.sol"]
+      MO["MockOracle.sol"]
+      HR["HospitalRegistry.sol"]
+      IP["InsurancePolicy.sol"]
+    end
+
+    FE --> API
+    FE --> MM
+    MM --> CP
+    API --> DB
+    API --> IPFS
+    API --> CP
+    ORC --> MO
+    ORC --> HS
+    HS --> DB
+    MO --> CP
+    CP --> MO
+    CP --> HR
+    API --> IP
+```
+
+## 6. Deployment Diagram
+
+```mermaid
+flowchart TB
+    User["User Browser + MetaMask"]
+
+    subgraph AppServer["Insurance App Server"]
+      FE["Frontend :3000"]
+      BE["Backend :3001"]
+      OD["Oracle daemon in backend process"]
+    end
+
+    subgraph HospitalServer["External Hospital Server"]
+      HS["hospital-service :3002"]
+    end
+
+    subgraph Data["Persistence"]
+      MYSQL[("MySQL")]
+      IPFS[("backend/ipfs")]
+    end
+
+    subgraph Blockchain["Hardhat / EVM"]
+      SC["ClaimsProcessor"]
+      OR["MockOracle"]
+      REG["HospitalRegistry"]
+      POL["InsurancePolicy"]
+    end
+
+    User --> FE
+    FE --> BE
+    FE --> SC
+    BE --> MYSQL
+    BE --> IPFS
+    OD --> OR
+    OD --> HS
+    HS --> MYSQL
+    SC --> OR
+    SC --> REG
+    BE --> POL
+```
+
+## 7. ERD
 
 ```mermaid
 erDiagram
-    USERS ||--o{ POLICIES : "owns (by wallet)"
-    USERS ||--o{ CLAIMS  : "files (by wallet)"
-    POLICIES ||--o{ CLAIMS : "covers"
-    CLAIMS ||--o{ CLAIM_FILES : "has evidence"
-
     USERS {
         int id PK
-        string wallet_address UK
+        string wallet_address
+        string role
         string full_name
-        string email
-        string phone
-        enum role "admin | customer"
+        string hospital_name
         string nonce
-        datetime created_at
-        datetime updated_at
     }
 
     POLICIES {
         int id PK
-        bigint chain_policy_id "on-chain ID"
+        bigint chain_policy_id
         string customer_wallet
-        string policy_type
-        decimal premium_eth
-        decimal max_coverage_eth
-        datetime start_date
-        datetime end_date
-        enum status "active | expired | cancelled"
-        string tx_hash
-        datetime created_at
-        datetime updated_at
+        string status
     }
 
     CLAIMS {
@@ -98,187 +245,67 @@ erDiagram
         bigint chain_claim_id
         int policy_id FK
         string claimant_wallet
-        decimal amount_eth
-        string evidence_hash
-        enum status "pending | under_review | needs_info | approved | rejected | paid"
-        text reject_reason
-        string tx_hash
-        datetime submitted_at
-        datetime processed_at
-        datetime created_at
-        datetime updated_at
+        string patient_id_hash
+        string hospital_wallet
+        string status
+        bigint oracle_request_id
     }
 
     CLAIM_FILES {
         int id PK
         int claim_id FK
-        string file_name
-        int file_size
-        string mime_type
-        string stored_path
-        datetime created_at
+        string ipfs_cid
+        string content_hash
     }
+
+    APPEALS {
+        int id PK
+        int claim_id FK
+        string appellant_wallet
+        string status
+    }
+
+    HOSPITAL_RECORDS {
+        int id PK
+        string hospital_wallet
+        string patient_id_hash
+        string patient_name
+        string record_number
+        bool claimable
+        decimal coverage_amount_eth
+    }
+
+    HOSPITAL_VERIFICATIONS {
+        int id PK
+        int claim_id FK
+        bigint oracle_request_id
+        int source_record_id FK
+        string hospital_wallet
+        string result
+        string status
+        string reviewed_by_wallet
+        string oracle_tx_hash
+    }
+
+    AUDIT_LOGS {
+        int id PK
+        string user_wallet
+        string action
+        string entity_type
+        string entity_id
+    }
+
+    POLICIES ||--o{ CLAIMS : has
+    CLAIMS ||--o{ CLAIM_FILES : has
+    CLAIMS ||--o| APPEALS : has
+    CLAIMS ||--o{ HOSPITAL_VERIFICATIONS : has
+    HOSPITAL_RECORDS ||--o{ HOSPITAL_VERIFICATIONS : source
 ```
 
-Quan hệ off-chain ↔ on-chain liên kết qua `chain_policy_id` / `chain_claim_id` và địa chỉ ví (`customer_wallet`, `claimant_wallet`).
+## 8. Key Design Notes
 
----
-
-## 3. Deployment Diagram
-
-Mô tả các node vật lý/logical khi chạy local stack qua `./scripts/start-all.sh`.
-
-```mermaid
-flowchart TB
-    subgraph Dev["Developer Machine"]
-        subgraph DockerHost["Docker"]
-            MYSQL[("insurance_db<br/>MySQL 8 :3306")]
-        end
-
-        subgraph NodeProc["Node processes"]
-            HH["Hardhat Node<br/>npx hardhat node<br/>:8545 chainId 31337"]
-            BE["Backend API<br/>node src/app.js<br/>:3001"]
-            FE["Frontend dev server<br/>react-scripts start<br/>:3000"]
-        end
-
-        subgraph FSVol["Filesystem"]
-            UP[("backend/uploads/")]
-            LOGS[(".logs/")]
-            ENV[("backend/.env<br/>frontend/.env")]
-        end
-
-        BROWSER["Browser + MetaMask<br/>http://localhost:3000"]
-    end
-
-    BROWSER -- "HTTP" --> FE
-    BROWSER -- "HTTP /api" --> BE
-    BROWSER -- "JSON-RPC" --> HH
-    BE -- "TCP 3306" --> MYSQL
-    BE -- "JSON-RPC 8545" --> HH
-    BE --> UP
-    BE -. "read at startup" .-> ENV
-    FE -. "read at build" .-> ENV
-    HH -. "writes" .-> LOGS
-    BE -. "writes" .-> LOGS
-    FE -. "writes" .-> LOGS
-```
-
-**Ports**
-
-| Service   | Port  | Process                  |
-|-----------|-------|--------------------------|
-| Frontend  | 3000  | react-scripts            |
-| Backend   | 3001  | node src/app.js          |
-| Hardhat   | 8545  | npx hardhat node         |
-| MySQL     | 3306  | docker compose service   |
-
----
-
-## 4. Repo functions — giải thích
-
-### `contracts/` (Solidity + Hardhat)
-
-| File | Mô tả |
-|------|------|
-| `contracts/InsurancePolicy.sol` | Quản lý policy on-chain. `createPolicy` (onlyAdmin), `cancelPolicy`, `isValid`, `getPolicy`, `getCustomerPolicies`. |
-| `contracts/ClaimsProcessor.sol` | Submit/approve/reject/pay claim. `submitClaim` (chỉ chủ policy), `approveClaim` + payout ETH (onlyAdmin), `rejectClaim`, `updateStatus`. |
-| `scripts/deploy.js` | Deploy 2 contract, seed 0.5 ETH vào ClaimsProcessor, in địa chỉ ra stdout. |
-| `hardhat.config.js` | Networks: `localhost` (127.0.0.1:8545), `sepolia` (RPC env). |
-
-### `backend/` (Express + Sequelize)
-
-| Module | Chức năng |
-|--------|-----------|
-| `src/app.js` | Bootstrap Express, mount routes `/api/{auth,policies,claims,files,public}`, sync Sequelize. |
-| `src/config/database.js` | Kết nối MySQL qua Sequelize. |
-| `src/config/blockchain.js` | Tạo `ethers.JsonRpcProvider` + signer admin từ `PRIVATE_KEY`. |
-| `src/models/*` | Sequelize models: `User`, `Policy`, `Claim`, `ClaimFile` + associations trong `index.js`. |
-| `src/middleware/auth-middleware.js` | Verify JWT, gắn `req.user`. |
-| `src/middleware/role-middleware.js` | `requireAdmin`, `requireCustomer`. |
-| `src/controllers/auth-controller.js` | `getNonce`, `login` (verify signature → JWT), `getMe`. |
-| `src/controllers/policy-controller.js` | List/create/get/cancel policy; create đồng bộ lên contract qua admin signer. |
-| `src/controllers/claim-controller.js` | List/get claim, approve/reject (gọi contract), update status. |
-| `src/controllers/file-controller.js` | Upload (multer) + serve evidence files, lưu metadata vào `claim_files`. |
-| `src/controllers/public-controller.js` | Đọc events từ contract → trả lịch sử tx và stats công khai. |
-
-### `frontend/` (React 18)
-
-| Module | Chức năng |
-|--------|-----------|
-| `src/App.jsx` | Routing, AuthProvider wrapper. |
-| `src/context/AuthContext.jsx` | Quản lý user + wallet, expose `connect`/`logout`. |
-| `src/hooks/use-wallet.js` | Kết nối MetaMask: revoke permission + `eth_requestAccounts` để show account picker; lắng nghe `accountsChanged`, `chainChanged`. |
-| `src/services/api.js` | Axios instance + JWT interceptor. |
-| `src/services/auth-service.js` | Flow nonce → sign → login. |
-| `src/services/{policy,claim,file,public}-service.js` | Gọi REST API tương ứng. |
-| `src/contracts/*` | ABI + helper gọi contract trực tiếp từ frontend (customer submit claim). |
-| `src/pages/LoginPage.jsx` | Nút "Connect MetaMask". |
-| `src/pages/DashboardPage.jsx` | Tổng quan policy/claim của user. |
-| `src/pages/PoliciesPage.jsx` + `PolicyDetailPage.jsx` | Xem danh sách / chi tiết policy. |
-| `src/pages/ClaimsPage.jsx` + `ClaimDetailPage.jsx` + `NewClaimPage.jsx` | Quản lý claim, submit claim mới (ký tx qua MetaMask). |
-| `src/pages/TransactionsPage.jsx` | Hiển thị lịch sử on-chain (transparency). |
-| `src/pages/admin/*` | UI admin: tạo policy, duyệt claim, quản lý user. |
-| `src/components/{layout,ui,policy,claim,admin}/*` | Components UI tái sử dụng. |
-
-### `scripts/`
-
-| File | Chức năng |
-|------|----------|
-| `start-all.sh` | One-shot khởi động: MySQL → Hardhat → deploy → seed → backend → frontend; tự ghi địa chỉ contract vào `.env`. |
-| `stop-all.sh` | Kill các PID lưu trong `.logs/*.pid` và `docker compose down`. |
-| `seed-demo-data.sql` | Insert user demo, policy mẫu để test ngay. |
-
-### `docker-compose.yml`
-
-Chỉ chứa service `mysql` (volume `mysql_data`, healthcheck `mysqladmin ping`).
-
----
-
-## 5. End-to-end flows
-
-### 5.1 Đăng nhập bằng MetaMask
-
-```
-FE → GET /auth/nonce?wallet=0x..
-Backend → find-or-create user, rotate nonce, trả về
-FE → personal_sign("Sign in to Insurance App: <nonce>")
-FE → POST /auth/login {wallet, signature}
-Backend → ethers.verifyMessage → rotate nonce → ký JWT 7d
-FE → lưu token + user vào localStorage
-```
-
-### 5.2 Tạo policy (admin)
-
-```
-Admin UI → POST /api/policies (JWT admin)
-policy-controller → ký tx createPolicy() bằng PRIVATE_KEY admin
-→ chờ receipt → lưu chain_policy_id + tx_hash vào MySQL
-→ trả về policy object
-```
-
-### 5.3 Submit claim (customer)
-
-```
-Customer → NewClaimPage upload files → POST /api/files/upload → trả claim_files IDs
-Customer → MetaMask ký tx submitClaim(policyId, amount, evidenceHash)
-→ chờ receipt
-FE → POST /api/claims {policy_id, amount_eth, evidence_hash, tx_hash, chain_claim_id}
-Backend → lưu record, link claim_files
-```
-
-### 5.4 Approve + payout (admin)
-
-```
-Admin → PATCH /api/claims/:id/approve
-claim-controller → gọi approveClaim() on-chain bằng admin signer
-→ contract chuyển ETH cho claimant
-→ update status = 'paid', processed_at, tx_hash
-```
-
----
-
-## Unresolved / Notes
-
-- Không có test suite tự động trong `backend/`; chỉ có Hardhat tests trong `contracts/test/`.
-- `start-all.sh` chỉ chạy được trên Linux/macOS (dùng `sed -i`, `fuser`, `lsof`).
-- Frontend chưa có production build pipeline (chỉ `react-scripts start`).
+- `insurer` là actor nghiệp vụ thật, tách khỏi `admin`.
+- `hospital` là actor xác minh thật, không còn random mock.
+- Oracle không tự quyết đúng/sai; nó chỉ bridge dữ liệu và submit verdict đã
+  được hospital user xác nhận.
+- Contract vẫn là nguồn chân lý cuối cùng cho payout và final claim state.

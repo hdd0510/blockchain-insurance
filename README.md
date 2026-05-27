@@ -1,154 +1,214 @@
-# InsurChain — Blockchain Insurance Prototype
+# InsurChain v3 — Blockchain Insurance With Real Hospital Verification Flow
 
-Hệ thống bảo hiểm phi tập trung: policy & claim được ghi lên smart contract (Ethereum/Hardhat), backend Node.js đồng bộ metadata vào MySQL, frontend React tương tác qua MetaMask.
+InsurChain v3 là bản nâng cấp từ demo mock sang mô hình gần thực tế hơn với
+`4` role đăng nhập:
 
-## Stack
+- `customer`
+- `hospital`
+- `insurer`
+- `admin`
 
-| Layer       | Tech                                                |
-|-------------|------------------------------------------------------|
-| Smart contracts | Solidity 0.8.24 + Hardhat + OpenZeppelin         |
-| Backend     | Node.js + Express + Sequelize (MySQL) + JWT          |
-| Frontend    | React 18 + react-router + ethers v6 + Tailwind       |
-| Wallet      | MetaMask (sign-in qua nonce + signature)             |
-| DB          | MySQL 8 (chạy bằng Docker)                           |
+Hệ thống kết hợp:
+
+- smart contract xử lý claim và payout on-chain
+- custom oracle service làm cầu nối tới hospital system
+- hospital service external chạy cổng riêng
+- hospital records trong MySQL để xác minh hồ sơ thật hơn
+- manual verification bởi hospital operator thay vì random mock
+
+## Những gì đã thay đổi so với bản cũ
+
+| Hạng mục | Bản cũ | Bản mới |
+|---|---|---|
+| Actor | `customer`, `admin`, `hospital` | `customer`, `hospital`, `insurer`, `admin` |
+| Hospital verify | random mock | tra `hospital_records` + hospital user xác nhận thủ công |
+| Oracle | tự gọi verify và tự quyết nhanh | tạo `pending_manual`, chờ hospital review rồi mới fulfill |
+| Hospital API | nằm chung backend | tách `hospital-service` riêng trên `:3002` |
+| Evidence storage | local uploads | mock IPFS + `bytes32 evidenceHash` on-chain |
+| Claim operations | admin xử lý nghiệp vụ | `insurer` là actor nghiệp vụ chính |
+| Audit | log cơ bản | giữ audit log off-chain xuyên suốt claim / hospital / appeal |
+
+## Kiến trúc mức cao
+
+1. `customer` submit claim on-chain bằng MetaMask.
+2. Backend mirror claim vào MySQL.
+3. `insurer` ký multi-sig để claim đi vào bước xác minh.
+4. Smart contract gọi `MockOracle.requestVerification`.
+5. Oracle service nghe event, gọi `hospital-service` external để dò record.
+6. Oracle ghi `hospital_verifications.status = pending_manual`.
+7. `hospital` đăng nhập portal, xem record match và tự xác nhận `verified` hoặc
+   `not_verified`.
+8. Oracle key fulfill lại smart contract.
+9. Smart contract tự payout hoặc reject.
+10. Backend sync trạng thái về MySQL và ghi `audit_logs`.
+
+Chi tiết hơn: [docs/architecture.md](docs/architecture.md)  
+Report đầy đủ: [docs/system-report.md](docs/system-report.md)
 
 ## Cấu trúc thư mục
 
-```
+```text
 blockchain-insurance/
-├── contracts/          # Hardhat project: InsurancePolicy.sol, ClaimsProcessor.sol
-├── backend/            # Express API: auth, policies, claims, files, public
-├── frontend/           # React SPA: customer + admin UI
-├── scripts/
-│   ├── start-all.sh    # Khởi động toàn bộ stack
-│   ├── stop-all.sh
-│   └── seed-demo-data.sql
-├── docker-compose.yml  # MySQL container
-└── docs/architecture.md  # Component / ERD / Deployment diagrams
+├── contracts/           # Hardhat contracts + tests
+├── backend/             # Express API + oracle daemon + Sequelize models
+├── frontend/            # React SPA cho customer / hospital / insurer / admin
+├── hospital-service/    # External demo hospital API
+├── scripts/             # start-all, stop-all, seed SQL
+└── docs/                # architecture + system report
 ```
 
-## Yêu cầu môi trường
+## Stack
 
-- Node.js ≥ 18
-- Docker + Docker Compose
-- MetaMask browser extension
-- Linux/macOS (script `start-all.sh` dùng bash + `sed`/`lsof`/`fuser`)
+- Smart contracts: Solidity 0.8.24, Hardhat, ethers
+- Backend: Node.js, Express, Sequelize, MySQL
+- Frontend: React 18, react-router, ethers
+- External hospital service: Express + mysql2
+- Wallet: MetaMask
 
-## Run all services (1 lệnh)
+## Role model
+
+### `customer`
+
+- đăng nhập bằng ví
+- gửi claim
+- upload evidence
+- xem trạng thái claim
+- nộp appeal
+
+### `hospital`
+
+- đăng nhập bằng ví bệnh viện đã được registry
+- xem verification request được gán cho ví của mình
+- xem hồ sơ từ `hospital_records`
+- xác nhận thủ công `verified / not_verified`
+
+### `insurer`
+
+- xem toàn bộ claim nghiệp vụ
+- ký multi-sig xử lý claim
+- reject thủ công trong case đặc biệt
+- review appeal
+- theo dõi verification status
+
+### `admin`
+
+- quản trị hệ thống
+- tạo / hủy policy
+- đăng ký hospital
+- xem audit logs
+- cấu hình signer / registry
+
+## Run all services
 
 ```bash
 cd blockchain-insurance
 ./scripts/start-all.sh
 ```
 
-Script sẽ tự động:
-1. Start MySQL container (port 3306)
-2. Start Hardhat node (port 8545, chain ID `31337`)
-3. Deploy 2 smart contracts → tự sync địa chỉ vào `backend/.env` & `frontend/.env`
-4. Seed demo data vào MySQL
-5. Start backend (port 3001)
-6. Start frontend (port 3000)
+Script sẽ:
 
-Logs: `.logs/{hardhat,backend,frontend,deploy}.log`. Dừng: `./scripts/stop-all.sh`.
+1. start MySQL
+2. start Hardhat node
+3. deploy `InsurancePolicy`, `HospitalRegistry`, `MockOracle`, `ClaimsProcessor`
+4. seed users, policies, hospital records
+5. start external `hospital-service` trên `:3002`
+6. start backend trên `:3001`
+7. start frontend trên `:3000`
 
-## Run thủ công (debug từng phần)
+## Demo accounts
+
+Tài khoản chính trong script:
+
+- `Admin / Signer A`: quản trị hệ thống
+- `Signer B`, `Signer C`: signer multi-sig
+- `Customer demo`: nộp claim
+- `Hospital demo`: xác minh hồ sơ
+- `Insurer demo`: xử lý nghiệp vụ claim
+
+Private keys được script in ra ở cuối `start-all.sh`.
+
+## Demo hospital records
+
+Để demo flow hospital verification:
+
+- `PATIENT-001`
+  - có record `HS-001`
+  - `claimable = true`
+  - hospital có thể xác nhận `verified`
+
+- `PATIENT-002`
+  - có record `HS-002`
+  - `claimable = false`
+  - hospital có thể xác nhận `not_verified`
+
+Frontend tự hash `patient_id` trước khi gửi on-chain.
+
+## API highlights
+
+### Backend insurance app
+
+- `GET /api/claims`
+- `POST /api/claims/:id/sign`
+- `PATCH /api/claims/:id/reject`
+- `GET /api/hospital/verifications`
+- `POST /api/hospital/verifications/:id/manual`
+- `GET /api/hospital/catalog`
+- `GET /api/audit-logs`
+
+### External hospital service
+
+- `POST /api/hospital/records/match`
+
+Service này không tự quyết payout. Nó chỉ trả record match để oracle tạo
+request `pending_manual`.
+
+## On-chain / off-chain split
+
+### On-chain
+
+- policy validity
+- claim submission
+- multi-sig approvals
+- oracle request
+- final payout / reject
+- appeal state machine
+- timeout / expire
+
+### Off-chain
+
+- user roles
+- JWT auth
+- file pinning metadata
+- hospital records
+- hospital verification workflow
+- audit logs
+
+## Security notes
+
+- Customer actions vẫn ký trực tiếp bằng MetaMask.
+- Một số admin/oracle actions trong demo vẫn dùng private key lưu trong
+  backend `.env`.
+- Contract đã dùng multi-sig `N/M`, nhưng secret management vẫn là dạng demo.
+- Hospital verification nay không còn random, nhưng vẫn là demo DB nội bộ chứ
+  chưa phải HIS/EMR production.
+
+## Testing
+
+### Contracts
 
 ```bash
-# 1. MySQL
-docker compose up -d
-
-# 2. Hardhat node (giữ terminal mở)
-cd contracts && npm install && npx hardhat node
-
-# 3. Deploy contracts (terminal khác)
-cd contracts && npx hardhat run scripts/deploy.js --network localhost
-# → copy CONTRACT_ADDRESS_POLICY / CONTRACT_ADDRESS_CLAIMS vào backend/.env và frontend/.env
-
-# 4. Backend
-cd backend && npm install
-cp .env.example .env   # nếu chưa có
-npm run dev            # nodemon, hoặc: npm start
-
-# 5. Frontend
-cd frontend && npm install
-npm start              # http://localhost:3000
+cd contracts
+npm test -- --no-compile
 ```
 
-## Cấu hình MetaMask
+### Backend helper tests
 
-1. Networks → Add network → **Hardhat Local**
-   - RPC URL: `http://127.0.0.1:8545`
-   - Chain ID: `31337`
-   - Symbol: `ETH`
-2. Import account: dùng private key in ra ở cuối script `start-all.sh` (admin có 10,000 ETH).
-3. Hoặc import bất kỳ account nào từ output của `npx hardhat node`.
-
-## Env vars
-
-### backend/.env
-```
-PORT=3001
-DB_HOST=localhost
-DB_NAME=insurance_db
-DB_USER=root
-DB_PASS=password
-JWT_SECRET=supersecretkey123
-RPC_URL=http://127.0.0.1:8545
-CONTRACT_ADDRESS_POLICY=   # sync tự động bởi start-all.sh
-CONTRACT_ADDRESS_CLAIMS=
-ADMIN_WALLET=
-PRIVATE_KEY=               # admin key dùng để gọi onlyAdmin từ backend
+```bash
+cd backend
+npm test
 ```
 
-### frontend/.env
-```
-REACT_APP_API_URL=http://localhost:3001/api
-REACT_APP_POLICY_CONTRACT=
-REACT_APP_CLAIMS_CONTRACT=
-REACT_APP_CHAIN_ID=31337
-```
+## Main docs
 
-## Smart contracts
-
-- **InsurancePolicy.sol** — admin tạo policy cho customer; lưu premium, max coverage, thời hạn, document hash. Events: `PolicyCreated`, `PolicyCancelled`.
-- **ClaimsProcessor.sol** — customer submit claim; admin approve/reject. Khi approve, contract tự chuyển ETH cho claimant. Events: `ClaimSubmitted`, `ClaimStatusUpdated`, `ClaimPaid`.
-
-## API endpoints (tóm tắt)
-
-| Method | Path                         | Auth         | Mô tả |
-|--------|------------------------------|--------------|-------|
-| GET    | `/api/auth/nonce?wallet=…`   | public       | Lấy nonce để ký |
-| POST   | `/api/auth/login`            | public       | Verify chữ ký → JWT |
-| GET    | `/api/auth/me`               | JWT          | Thông tin user hiện tại |
-| GET    | `/api/policies`              | JWT          | List policies (customer thấy của mình, admin thấy tất cả) |
-| POST   | `/api/policies`              | admin        | Tạo policy (đồng bộ on-chain) |
-| GET    | `/api/policies/:id`          | JWT          | Chi tiết policy |
-| PATCH  | `/api/policies/:id/cancel`   | admin        | Huỷ policy |
-| GET    | `/api/claims`                | JWT          | List claims |
-| POST   | `/api/claims`                | customer     | Tạo claim record (sau khi submit on-chain) |
-| GET    | `/api/claims/:id`            | JWT          | Chi tiết claim |
-| PATCH  | `/api/claims/:id/approve`    | admin        | Duyệt + trigger payout |
-| PATCH  | `/api/claims/:id/reject`     | admin        | Từ chối |
-| PATCH  | `/api/claims/:id/status`     | admin        | Đổi trạng thái (under_review, needs_info…) |
-| POST   | `/api/files/upload`          | JWT          | Upload evidence (multipart) |
-| GET    | `/api/files/:id`             | JWT          | Tải file |
-| GET    | `/api/public/transactions`   | public       | Lịch sử tx (transparency layer) |
-| GET    | `/api/public/stats`          | public       | Số liệu tổng quan |
-
-## Auth flow (MetaMask sign-in)
-
-1. Frontend `GET /auth/nonce?wallet=0x…` → backend tạo/load user, trả nonce.
-2. MetaMask ký message `Sign in to Insurance App: <nonce>`.
-3. Frontend `POST /auth/login` { wallet, signature } → backend dùng `ethers.verifyMessage`, rotate nonce, phát hành JWT (7 ngày).
-4. Mọi request tiếp theo gửi `Authorization: Bearer <token>`.
-
-## Tài liệu thêm
-
-- Kiến trúc + ERD + deployment: [`docs/architecture.md`](docs/architecture.md)
-
-## Troubleshooting
-
-- **MetaMask không kết nối được**: kiểm tra network đang chọn là Hardhat Local (chain 31337); reset account sau khi restart Hardhat node (Settings → Advanced → Clear activity tab data).
-- **Backend báo `Failed to sync database`**: chờ MySQL container ready (`docker logs insurance_db`).
-- **Contract address không khớp**: chạy lại `./scripts/start-all.sh` — script tự ghi đè `.env`.
-- **Port conflict**: script tự kill process trên 3000/3001; với 8545/3306 cần xử lý thủ công.
+- [docs/architecture.md](docs/architecture.md)
+- [docs/system-report.md](docs/system-report.md)
