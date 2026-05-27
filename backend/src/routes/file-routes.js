@@ -1,13 +1,14 @@
 const { Router } = require('express');
-const { uploadFiles, getFile } = require('../controllers/file-controller');
+const { uploadFiles, getFile, getByCid } = require('../controllers/file-controller');
 const authMiddleware = require('../middleware/auth-middleware');
 
 const router = Router();
 
-// All file routes require authentication
-router.use(authMiddleware);
+// Public IPFS CID lookup so on-chain `evidenceHash` consumers can verify content.
+router.get('/ipfs/:cid', getByCid);
 
-// multipart/form-data handled inside uploadFiles controller via multer
+// All other file routes require authentication
+router.use(authMiddleware);
 router.post('/upload', uploadFiles);
 router.get('/:id', getFile);
 

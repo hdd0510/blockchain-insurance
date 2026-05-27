@@ -1,5 +1,6 @@
 const { Policy, Claim } = require('../models');
 const { createPolicyOnChain, cancelPolicyOnChain } = require('../services/blockchain-service');
+const { logAction } = require('../services/audit-service');
 
 /**
  * GET /policies
@@ -72,6 +73,21 @@ async function createPolicy(req, res) {
     tx_hash: txHash,
   });
 
+  await logAction(req, {
+    action: 'policy.create',
+    entityType: 'policy',
+    entityId: policy.id,
+    newValue: {
+      customer_wallet,
+      policy_type,
+      premium_eth,
+      max_coverage_eth,
+      duration_days: days,
+      chain_policy_id: chainPolicyId,
+    },
+    txHash,
+  });
+
   return res.status(201).json(policy);
 }
 
@@ -114,6 +130,16 @@ async function cancelPolicy(req, res) {
   }
 
   await policy.update({ status: 'cancelled', tx_hash: txHash });
+
+  await logAction(req, {
+    action: 'policy.cancel',
+    entityType: 'policy',
+    entityId: policy.id,
+    oldValue: { status: 'active' },
+    newValue: { status: 'cancelled' },
+    txHash,
+  });
+
   return res.json(policy);
 }
 
