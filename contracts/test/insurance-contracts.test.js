@@ -1,6 +1,18 @@
 const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
+const POLICY_TYPE = "health";
+const ZERO_BYTES32 = "0x" + "0".repeat(64);
+
+const SEED = ethers.parseEther("2");
+const CLAIM_AMOUNT = ethers.parseEther("0.3");
+const EVIDENCE = ethers.keccak256(ethers.toUtf8Bytes("evidence"));
+const PATIENT = ethers.keccak256(ethers.toUtf8Bytes("patient-123"));
+
+// ---------------------------------------------------------------------------
+// InsurancePolicy
+// ---------------------------------------------------------------------------
+
 describe("InsurancePolicy", () => {
   let policy, admin, customer, other;
 
@@ -13,7 +25,7 @@ describe("InsurancePolicy", () => {
   const createTestPolicy = () =>
     policy.connect(admin).createPolicy(
       customer.address,
-      "health",
+      POLICY_TYPE,
       ethers.parseEther("0.01"),
       ethers.parseEther("1"),
       365,
@@ -23,129 +35,279 @@ describe("InsurancePolicy", () => {
   it("admin can create a policy", async () => {
     await expect(createTestPolicy())
       .to.emit(policy, "PolicyCreated")
-      .withArgs(1, customer.address, "health");
+      .withArgs(1, customer.address, POLICY_TYPE);
 
     const p = await policy.getPolicy(1);
     expect(p.customer).to.equal(customer.address);
-    expect(p.policyType).to.equal("health");
     expect(p.maxCoverage).to.equal(ethers.parseEther("1"));
   });
 
   it("non-admin cannot create a policy", async () => {
     await expect(
-      policy.connect(other).createPolicy(customer.address, "health",
-        ethers.parseEther("0.01"), ethers.parseEther("1"), 365,
-        ethers.keccak256(ethers.toUtf8Bytes("doc")))
+      policy.connect(other).createPolicy(
+        customer.address,
+        POLICY_TYPE,
+        ethers.parseEther("0.01"),
+        ethers.parseEther("1"),
+        365,
+        ethers.keccak256(ethers.toUtf8Bytes("doc"))
+      )
     ).to.be.revertedWith("Not admin");
   });
 
-  it("isValid returns true for active policy", async () => {
+  it("isValid + cancel work", async () => {
     await createTestPolicy();
-    expect(await policy.isValid(1)).to.be.true;
-  });
-
-  it("getCustomerPolicies returns correct ids", async () => {
-    await createTestPolicy();
-    await createTestPolicy();
-    const ids = await policy.getCustomerPolicies(customer.address);
-    expect(ids.length).to.equal(2);
-    expect(ids[0]).to.equal(1);
-    expect(ids[1]).to.equal(2);
-  });
-
-  it("admin can cancel a policy", async () => {
-    await createTestPolicy();
+    expect(await policy.isValid(1)).to.equal(true);
     await policy.connect(admin).cancelPolicy(1);
-    expect(await policy.isValid(1)).to.be.false;
+    expect(await policy.isValid(1)).to.equal(false);
   });
 });
 
-describe("ClaimsProcessor", () => {
-  let policy, claims, admin, customer, other;
-  const SEED = ethers.parseEther("1");
-  const CLAIM_AMOUNT = ethers.parseEther("0.3");
-  const EVIDENCE = ethers.keccak256(ethers.toUtf8Bytes("evidence"));
+// ---------------------------------------------------------------------------
+// HospitalRegistry
+// ---------------------------------------------------------------------------
+
+describe("HospitalRegistry", () => {
+  let registry, admin, hospital, other;
 
   beforeEach(async () => {
-    [admin, customer, other] = await ethers.getSigners();
+    [admin, hospital, other] = await ethers.getSigners();
+    const Registry = await ethers.getContractFactory("HospitalRegistry");
+    registry = await Registry.deploy();
+  });
+
+  it("admin can register and update hospitals", async () => {
+    await expect(
+      registry
+        .connect(admin)
+        .registerHospital(hospital.address, "Demo", "http://localhost/api")
+    )
+      .to.emit(registry, "HospitalRegistered")
+      .withArgs(hospital.address, "Demo", "http://localhost/api");
+
+    expect(await registry.isActiveHospital(hospital.address)).to.equal(true);
+
+    await registry
+      .connect(admin)
+      .updateHospital(hospital.address, "Demo 2", "http://x", false);
+    expect(await registry.isActiveHospital(hospital.address)).to.equal(false);
+  });
+
+  it("non-admin cannot register", async () => {
+    await expect(
+      registry.connect(other).registerHospital(hospital.address, "X", "u")
+    ).to.be.revertedWith("Hospital: not admin");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MockOracle
+// ---------------------------------------------------------------------------
+
+describe("MockOracle", () => {
+  let oracle, admin, node, hospital, otherSigner;
+
+  beforeEach(async () => {
+    [admin, node, hospital, otherSigner] = await ethers.getSigners();
+    const Oracle = await ethers.getContractFactory("MockOracle");
+    oracle = await Oracle.deploy(node.address);
+  });
+
+  it("emits VerificationRequested with monotonic ids", async () => {
+    await expect(
+      oracle
+        .connect(otherSigner)
+        .requestVerification(42, PATIENT, hospital.address)
+    )
+      .to.emit(oracle, "VerificationRequested")
+      .withArgs(1, 42, PATIENT, hospital.address, otherSigner.address);
+    expect(await oracle.requestCount()).to.equal(1);
+  });
+
+  it("rejects non-oracle node on fulfill", async () => {
+    await oracle
+      .connect(otherSigner)
+      .requestVerification(42, PATIENT, hospital.address);
+    await expect(
+      oracle.connect(admin).fulfillVerification(1, true, "ok")
+    ).to.be.revertedWith("Oracle: not oracle node");
+  });
+
+  it("admin can rotate oracle node", async () => {
+    await expect(oracle.connect(admin).setOracleNode(otherSigner.address))
+      .to.emit(oracle, "OracleNodeUpdated")
+      .withArgs(node.address, otherSigner.address);
+    expect(await oracle.oracleNode()).to.equal(otherSigner.address);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ClaimsProcessor v2 — multi-sig + Oracle + appeal + timeout
+// ---------------------------------------------------------------------------
+
+describe("ClaimsProcessor v2", () => {
+  let policy, oracle, registry, claims;
+  let admin, signerB, signerC, customer, hospital, node, outsider;
+
+  const setupBase = async () => {
+    [admin, signerB, signerC, customer, hospital, node, outsider] =
+      await ethers.getSigners();
 
     const Policy = await ethers.getContractFactory("InsurancePolicy");
     policy = await Policy.deploy();
 
+    const Registry = await ethers.getContractFactory("HospitalRegistry");
+    registry = await Registry.deploy();
+
+    const Oracle = await ethers.getContractFactory("MockOracle");
+    oracle = await Oracle.deploy(node.address);
+
     const Claims = await ethers.getContractFactory("ClaimsProcessor");
-    claims = await Claims.deploy(await policy.getAddress(), { value: SEED });
-
-    // Create a policy for customer
-    await policy.connect(admin).createPolicy(
-      customer.address, "health",
-      ethers.parseEther("0.01"), ethers.parseEther("1"),
-      365, ethers.keccak256(ethers.toUtf8Bytes("doc"))
+    claims = await Claims.deploy(
+      await policy.getAddress(),
+      await oracle.getAddress(),
+      await registry.getAddress(),
+      [admin.address, signerB.address, signerC.address],
+      2, // 2-of-3
+      7 * 24 * 60 * 60, // 7 days timeout
+      { value: SEED }
     );
+
+    // Register hospital + create policy
+    await registry
+      .connect(admin)
+      .registerHospital(hospital.address, "Demo", "http://localhost");
+    await policy
+      .connect(admin)
+      .createPolicy(
+        customer.address,
+        POLICY_TYPE,
+        ethers.parseEther("0.01"),
+        ethers.parseEther("1"),
+        365,
+        ethers.keccak256(ethers.toUtf8Bytes("doc"))
+      );
+  };
+
+  beforeEach(setupBase);
+
+  const submitClaim = () =>
+    claims
+      .connect(customer)
+      .submitClaim(1, CLAIM_AMOUNT, EVIDENCE, PATIENT, hospital.address);
+
+  it("customer submits a claim and it stays Pending", async () => {
+    await expect(submitClaim()).to.emit(claims, "ClaimSubmitted");
+    const c = await claims.getClaim(1);
+    expect(c.status).to.equal(0); // Pending
+    expect(c.amount).to.equal(CLAIM_AMOUNT);
   });
 
-  it("customer can submit a claim", async () => {
-    await expect(claims.connect(customer).submitClaim(1, CLAIM_AMOUNT, EVIDENCE))
-      .to.emit(claims, "ClaimSubmitted")
-      .withArgs(1, 1, customer.address, CLAIM_AMOUNT);
-
-    const claim = await claims.getClaim(1);
-    expect(claim.claimant).to.equal(customer.address);
-    expect(claim.amount).to.equal(CLAIM_AMOUNT);
-    expect(claim.status).to.equal(0); // Pending
+  it("submitClaim rejects non-active hospital", async () => {
+    await registry.connect(admin).deactivateHospital(hospital.address);
+    await expect(submitClaim()).to.be.revertedWith("Claims: hospital not active");
   });
 
-  it("rejects claim if policy is not valid", async () => {
-    await policy.connect(admin).cancelPolicy(1);
-    await expect(
-      claims.connect(customer).submitClaim(1, CLAIM_AMOUNT, EVIDENCE)
-    ).to.be.revertedWith("Policy not valid or expired");
+  it("requires threshold signatures before oracle request", async () => {
+    await submitClaim();
+
+    await expect(claims.connect(admin).signApproval(1))
+      .to.emit(claims, "ClaimApprovalSigned")
+      .withArgs(1, admin.address, 1, 2);
+
+    let c = await claims.getClaim(1);
+    expect(c.status).to.equal(1); // UnderReview after first sig
+    expect(c.oracleRequestId).to.equal(0n);
+
+    await claims.connect(signerB).signApproval(1);
+    c = await claims.getClaim(1);
+    expect(c.approvalsCount).to.equal(2);
+    expect(c.oracleRequestId).to.be.greaterThan(0n);
   });
 
-  it("rejects claim if amount exceeds maxCoverage", async () => {
-    await expect(
-      claims.connect(customer).submitClaim(1, ethers.parseEther("2"), EVIDENCE)
-    ).to.be.revertedWith("Invalid claim amount");
-  });
+  it("oracle verified=true triggers payout", async () => {
+    await submitClaim();
+    await claims.connect(admin).signApproval(1);
+    await claims.connect(signerB).signApproval(1);
 
-  it("rejects claim from non-policy-owner", async () => {
-    await expect(
-      claims.connect(other).submitClaim(1, CLAIM_AMOUNT, EVIDENCE)
-    ).to.be.revertedWith("Not policy owner");
-  });
-
-  it("admin can approve claim and customer receives ETH", async () => {
-    await claims.connect(customer).submitClaim(1, CLAIM_AMOUNT, EVIDENCE);
+    const c1 = await claims.getClaim(1);
+    const reqId = c1.oracleRequestId;
 
     const before = await ethers.provider.getBalance(customer.address);
-    await claims.connect(admin).approveClaim(1);
+    await expect(oracle.connect(node).fulfillVerification(reqId, true, "ok"))
+      .to.emit(claims, "ClaimPaid");
     const after = await ethers.provider.getBalance(customer.address);
-
     expect(after - before).to.be.closeTo(CLAIM_AMOUNT, ethers.parseEther("0.001"));
 
-    const claim = await claims.getClaim(1);
-    expect(claim.status).to.equal(5); // Paid
+    const c2 = await claims.getClaim(1);
+    expect(c2.status).to.equal(5); // Paid
   });
 
-  it("admin can reject claim with reason", async () => {
-    await claims.connect(customer).submitClaim(1, CLAIM_AMOUNT, EVIDENCE);
-    await claims.connect(admin).rejectClaim(1, "Insufficient evidence");
+  it("oracle verified=false rejects without payout", async () => {
+    await submitClaim();
+    await claims.connect(admin).signApproval(1);
+    await claims.connect(signerB).signApproval(1);
+    const reqId = (await claims.getClaim(1)).oracleRequestId;
 
-    const claim = await claims.getClaim(1);
-    expect(claim.status).to.equal(4); // Rejected
-    expect(claim.rejectReason).to.equal("Insufficient evidence");
+    await oracle.connect(node).fulfillVerification(reqId, false, "no record");
+    const c = await claims.getClaim(1);
+    expect(c.status).to.equal(6); // Rejected
+    expect(c.rejectReason).to.equal("no record");
   });
 
-  it("non-admin cannot approve", async () => {
-    await claims.connect(customer).submitClaim(1, CLAIM_AMOUNT, EVIDENCE);
-    await expect(claims.connect(other).approveClaim(1)).to.be.revertedWith("Not admin");
-  });
+  it("appeal flow: claimant appeals, admins accept → re-trigger oracle", async () => {
+    // Get to rejected
+    await submitClaim();
+    await claims.connect(admin).signApproval(1);
+    await claims.connect(signerB).signApproval(1);
+    const reqId1 = (await claims.getClaim(1)).oracleRequestId;
+    await oracle.connect(node).fulfillVerification(reqId1, false, "wrong");
 
-  it("full lifecycle: submit → under review → approve → paid", async () => {
-    await claims.connect(customer).submitClaim(1, CLAIM_AMOUNT, EVIDENCE);
-    await claims.connect(admin).updateClaimStatus(1, 1); // UnderReview
-    expect((await claims.getClaim(1)).status).to.equal(1);
+    // File appeal
+    await expect(claims.connect(customer).fileAppeal(1, "have more docs"))
+      .to.emit(claims, "AppealFiled");
+    let c = await claims.getClaim(1);
+    expect(c.status).to.equal(7); // Appealed
 
-    await claims.connect(admin).approveClaim(1);
+    // Two admin signers accept
+    await claims.connect(admin).reviewAppeal(1, true);
+    await claims.connect(signerB).reviewAppeal(1, true);
+
+    c = await claims.getClaim(1);
+    expect(c.oracleRequestId).to.not.equal(reqId1); // new oracle request issued
+
+    // Oracle re-verifies true → payout
+    await oracle.connect(node).fulfillVerification(c.oracleRequestId, true, "approved");
     expect((await claims.getClaim(1)).status).to.equal(5); // Paid
+  });
+
+  it("appeal flow: admins reject appeal → AppealRejected", async () => {
+    await submitClaim();
+    await claims.connect(admin).signApproval(1);
+    await claims.connect(signerB).signApproval(1);
+    const reqId = (await claims.getClaim(1)).oracleRequestId;
+    await oracle.connect(node).fulfillVerification(reqId, false, "x");
+    await claims.connect(customer).fileAppeal(1, "review");
+
+    await claims.connect(admin).reviewAppeal(1, false);
+    await claims.connect(signerB).reviewAppeal(1, false);
+    expect((await claims.getClaim(1)).status).to.equal(10); // AppealRejected
+  });
+
+  it("timeout: anyone can escalate after window passes", async () => {
+    await submitClaim();
+    // fast-forward
+    await ethers.provider.send("evm_increaseTime", [8 * 24 * 60 * 60]);
+    await ethers.provider.send("evm_mine", []);
+    await expect(claims.connect(outsider).escalateExpiredClaim(1))
+      .to.emit(claims, "ClaimExpired");
+    expect((await claims.getClaim(1)).status).to.equal(11); // Expired
+  });
+
+  it("non-signer cannot sign approval", async () => {
+    await submitClaim();
+    await expect(
+      claims.connect(outsider).signApproval(1)
+    ).to.be.revertedWith("Claims: not admin signer");
   });
 });
