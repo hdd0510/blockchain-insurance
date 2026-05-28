@@ -1,4 +1,5 @@
 import axios from "axios";
+import { clearAuth, getToken } from "./auth-storage";
 
 // Dynamic base URL: uses the same hostname the frontend is loaded from.
 // This makes the app work whether accessed via localhost OR network IP.
@@ -18,10 +19,10 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-// Attach JWT token from localStorage to every request
+// Attach JWT token from this tab's sessionStorage to every request
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem("token");
+    const token = getToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -35,9 +36,8 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      // Token expired or invalid — clear storage
-      localStorage.removeItem("token");
-      localStorage.removeItem("user");
+      // Token expired or invalid — clear this tab's session only
+      clearAuth();
     }
     return Promise.reject(error);
   }
